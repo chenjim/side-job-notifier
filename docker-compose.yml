@@ -1,0 +1,23 @@
+
+services:
+  app:
+    container_name: side-job-android-notifier
+    build: .
+    restart: always
+    network_mode: host
+    tty: true
+    stdin_open: true
+    # 使用当前用户的UID和GID运行容器 (chenjim: UID=1000, GID=1001)
+    user: "${UID:-1000}:${GID:-1001}"
+    dns:
+      - 8.8.8.8
+      - 114.114.114.114
+      - 223.5.5.5
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONIOENCODING=utf-8
+      - TZ=Asia/Shanghai
+    volumes:
+      - .:/app
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro

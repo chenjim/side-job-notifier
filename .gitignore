@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Environments
+.env
+.venv
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# 调试和数据文件
+html.txt
+data.json
+android.json
+data/
+*.json
+
+urlData/
+
+*.log
+
+# Tool-specific files
+#.trae/
