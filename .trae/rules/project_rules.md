@@ -1,4 +1,0 @@
-- python 实现
-- 跨平台，支持 windows、mac、linux
-- 支持 python 3.8 及以上版本
-- 每天8-22点每隔一小时访问`https://eleduck.com/`，当新发现含有`Android`（忽略大小写）或者`安卓`，把内容和链接等提取保存到类似`android.json`，并发邮件通知`h89_cn@163.com`。

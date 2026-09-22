@@ -8,7 +8,7 @@ from typing import List, Dict
 from email.mime.text import MIMEText
 from email.header import Header
 from email.utils import formataddr
-from logger import log_info, log_error, log_warning
+from core.logger import log_info, log_error, log_warning
 
 class BaseScraper(ABC):
     """抓取器基类，定义所有抓取器的通用接口。"""
@@ -98,7 +98,7 @@ class BaseScraper(ABC):
             
             message = MIMEText(body, 'html', 'utf-8')
             message['From'] = formataddr(("JobNotifier", SENDER_EMAIL))
-            message['To'] = formataddr(("h89_cn", RECIPIENT_EMAIL))
+            message['To'] = formataddr(("JobNotifier", RECIPIENT_EMAIL))
             message['Subject'] = Header(subject, 'utf-8')
             
             with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:

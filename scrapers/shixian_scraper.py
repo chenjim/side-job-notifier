@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict
 from .base_scraper import BaseScraper
-from logger import log_info, log_error, log_warning
+from core.logger import log_info, log_error, log_warning
 
 class ShixianScraper(BaseScraper):
     """实现网抓取器"""

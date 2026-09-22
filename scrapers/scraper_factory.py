@@ -6,6 +6,7 @@ from .eleduck_scraper import EleduckScraper
 from .yuanjisong_scraper import YuanjisongScraper
 from .sxsoft_scraper import SxsoftScraper
 from .shixian_scraper import ShixianScraper
+from .v2ex_scraper import V2exScraper
 
 class ScraperFactory:
     """抓取器工厂类，根据网站类型创建对应的抓取器。"""
@@ -15,6 +16,7 @@ class ScraperFactory:
         'yuanjisong': YuanjisongScraper,
         'sxsoft': SxsoftScraper,
         'shixian': ShixianScraper,
+        'v2ex': V2exScraper,
         # 后续可以添加更多抓取器
         # 'other_site': OtherSiteScraper,
     }

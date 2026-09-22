@@ -1,205 +1,174 @@
-# 智能招聘监控助手 - 不再错过任何兼职机会
+# 兼职机会智能监控助手 side-job-notifier
 
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/) [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Mac%20%7C%20Linux-lightgrey)](https://github.com/your-repo) [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/downloads/) [![Docker](https://img.shields.io/badge/docker-compose-2496ED)](https://docs.docker.com/compose/) [![Playwright](https://img.shields.io/badge/crawler-playwright-2EAD33)](https://playwright.dev/)
 
 [TOC]
 
-> 本文首发地址 <https://h89.cn/archives/486.html>
+> 项目起源文章 <https://h89.cn/archives/486.html>
 
-## 🎯 项目亮点
+![工作流程](https://blog-chenjim.oss-cn-shanghai.aliyuncs.com/2026/260922-side-job-notifier-architecture.png-blog)
 
-还在为错过心仪的Android兼职项目而懊恼吗？这个智能监控助手将彻底改变你的兼职接单体验！它能够24/7全天候监控多个热门兼职平台，精准捕捉相关外包项目，第一时间推送给你。
+## 🎯 项目简介
 
-> **核心功能**: 每天8-22点每隔一小时智能扫描电鸭社区，当发现含有"Android"（不区分大小写）或"安卓"关键词的最新兼职/外包项目时，立即保存到本地数据库并发送邮件通知到指定邮箱。
+盯兼职/外包平台是件很耗注意力的事：要反复刷站、要在大量无关帖里挑出值得接的那几条。这个工具把这件事全自动做掉——**定时抓取多个平台 → 去重与时间窗过滤 → 交给大模型按你的画像打分 → 只把高分机会汇总成一封邮件推给你**。
 
-## ✨ 为什么选择这个工具？
+它已经不只服务 Android 方向：站点、关键词权重、值不值得推荐，全部由 `USER_PROFILE` 画像决定（真实画像放 `.env`，代码里只留示例），换方向只改画像文案，不用动抓取代码。
 
-### 🚀 智能高效
-- **多平台覆盖**: 同时监控电鸭社区、猿急送、软件项目交易网、实现网等主流兼职/外包平台
-- **精准筛选**: 基于关键词的智能匹配，只推送你真正关心的兼职项目
-- **实时通知**: 新项目发布后第一时间邮件推送，抢占接单先机
+- **抓取**：电鸭社区、猿急送、软件项目交易网、实现网、V2EX 外包节点（5 站）
+- **筛选**：按 link 去重 + 时间窗（最近 2 天；无时间字段的站点取列表前 30 条兜底）
+- **判断**：LLM 按画像给 0–10 分并给出推荐理由，`score >= 5` 才推
+- **推送**：按分数降序取 Top 10，163 邮箱 SMTP 汇总邮件
+- **兜底**：LLM 批次失败发告警邮件；抓取失败保存 HTML 便于排查；全流程写日志
 
-### 🔧 稳定可靠
-- **异常监控**: 网站访问异常时自动重试并发送错误报告
-- **数据持久化**: 本地存储已通知记录，避免重复推送
-- **跨平台支持**: 完美支持Windows、Mac、Linux系统
-- **容器化部署**: 提供Docker支持，一键部署，环境隔离
+## 🔄 工作流程
 
-### 💡 开发者友好
-- **模块化设计**: 易于扩展新的招聘网站支持
-- **详细日志**: 完整的运行日志，便于调试和监控
-- **开源透明**: 代码完全开源，可自由定制和修改
+1. **定时调度**：容器常驻，启动后立即跑一轮，之后每天 8:00–22:00 之间每 150–180 分钟随机执行一次（不需要额外 crontab / 系统定时器）。
+2. **全量抓取**：工厂模式为每个站点创建抓取器，Playwright 处理动态渲染与基础反爬；被墙站点（V2EX）走宿主机代理，国内站点与邮箱直连。
+3. **去重 + 时间窗**：与 `data/*.json` 里已分析过的 link 比对，只留新帖；再按时间窗收敛，把 LLM 调用量压到最小。
+4. **LLM 打分**：按 `LLM_BATCH_SIZE`（默认 8 条）分批调用 OpenAI 兼容接口，模型返回 `score / recommend / reason`。
+5. **落盘 + 推送**：分析成功（含低分）立即原子写入 `data/*.json`，下轮不再重复分析；`score >= 5` 的按分数降序，最多 `MAX_PUSH_PER_RUN` 条汇总成一封邮件发出。
 
 ## 📋 功能特性
 
-- ✅ **多平台支持**: 支持电鸭社区、猿急送、软件项目交易网、实现网等多个兼职/外包平台
-- ✅ **自动抓取**: 定时从多个平台抓取最新的兼职项目列表
-- ✅ **关键词筛选**: 根据预设的关键词（不区分大小写）筛选出您感兴趣的兼职项目
-- ✅ **邮件通知**: 当发现新的相关兼职项目时，立即发送邮件通知，内容包括项目标题、摘要、发布时间和链接
-- ✅ **异常监控**: 当平台访问或解析出现异常时，自动发送邮件通知
-- ✅ **调试支持**: 自动保存 HTML 调试文件，便于问题排查和平台结构分析
-- ✅ **持久化存储**: 保存已通知过的项目记录，避免重复发送
-- ✅ **灵活调度**: 可配置在每天的特定时间段内（如 8:00 - 22:00）按指定频率（如每小时）运行
+- ✅ **多平台**：5 个兼职/外包站点，新增站点只需三步（见「添加新站点」）
+- ✅ **画像驱动**：推荐口径集中在 `USER_PROFILE`，比关键词匹配更准（能识别「驻场 / 到岗」这类隐性排除项）
+- ✅ **不重复打扰**：分析过的帖子入库留痕，同一帖子只判一次、只推一次
+- ✅ **成本可控**：时间窗 + 位置兜底 + 批量打分，避免把整站历史帖都送进 LLM
+- ✅ **异常不静默**：LLM 批次失败发告警邮件并跳过该批（不入库，下轮自动重试），不会悄悄空转
+- ✅ **可排查**：`log/` 留存运行日志，`urlData/` 留存抓取失败时的 HTML 快照
+- ✅ **容器化**：Docker Compose 一键部署，Playwright 依赖全在镜像里
 
 ## 🛠️ 快速开始
 
 ### 环境要求
-- Python 3.8 或更高版本
-- 稳定的网络连接
-- 邮箱账户（用于发送通知）
+
+- Docker + Docker Compose（推荐）；本地开发用 Python 3.10
+- 一个可用的 SMTP 邮箱（163 等，需**授权码**而非登录密码）
+- 一个 OpenAI 兼容的 LLM 接口（默认 OpenCode Go，`deepseek-v4-flash`）
 
 ### 1. 克隆项目
+
 ```bash
 git clone https://github.com/chenjim/side-job-notifier
-cd eleduck-android-notify
+cd side-job-notifier
 ```
 
-### 2. 安装依赖
+### 2. 配置密钥（`.env`）
+
 ```bash
-pip install -r requirements.txt
+cp .env.example .env
 ```
 
-### 3. 配置邮箱和关键词
-打开 `config.py` 文件，根据你的需求修改以下配置：
+`.env` 已被 `.gitignore` 忽略，**不要把真实密钥写进 `config.py`**。变量含义：
 
-```python
-# 关键词配置（支持多个关键词，用于筛选兼职项目）
-KEYWORDS = ["android", "安卓", "Android开发", "移动端开发", "兼职"]
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `LLM_BASE_URL` | OpenAI 兼容接口地址 | `https://opencode.ai/zen/go/v1` |
+| `LLM_API_KEY` | 接口密钥 | 必填 |
+| `LLM_MODEL` | 打分模型 | `deepseek-v4-flash` |
+| `LLM_BATCH_SIZE` | 每次调用分析的帖子数 | `8` |
+| `LLM_TIMEOUT` | 单次调用超时（秒） | `60` |
+| `SMTP_HOST` / `SMTP_PORT` | 发件服务器 | `smtp.163.com` / `465` |
+| `SMTP_USER` / `SMTP_PASSWORD` | 发件账号 / 授权码 | 必填 |
+| `SMTP_TO` | 收件人 | — |
+| `USER_PROFILE` | 用户画像，决定「什么值得推」；留空则用代码里的示例画像 | 示例画像 |
+| `PROXY_URL` | 被墙站点走的宿主机代理 | `http://127.0.0.1:7890` |
 
-# 收件人邮箱（接收兼职项目通知）
-RECIPIENT_EMAIL = "your-email@example.com"
+### 3. 本地运行（开发调试）
 
-# 发件人邮箱配置
-SENDER_EMAIL = "your-sender@163.com"
-SENDER_PASSWORD = "your-email-password"  # 建议使用授权码
-SMTP_SERVER = "smtp.163.com"
-SMTP_PORT = 465
-```
-
-### 4. 启动监控
-
-#### 方式一：直接运行（适合开发调试）
 ```bash
-python main.py
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+set -a; . ./.env; set +a          # 把 .env 注入当前 shell
+.venv/bin/python main.py
 ```
 
-#### 方式二：Docker部署（推荐用于生产环境）
+改完代码跑测试：
 
-**使用 Docker Compose（推荐）**
 ```bash
-# 构建并启动容器
-docker-compose up -d
-
-# 查看运行日志
-docker-compose logs -f
-
-# 停止容器
-docker-compose down
+.venv/bin/python -m pytest tests/
 ```
 
-**使用 Docker 命令**
+### 4. Docker 部署（推荐）
+
 ```bash
-# 构建镜像
-docker build -t side-job-android-notifier .
-
-# 运行容器
-docker run -d \
-  --name side-job-android-notifier \
-  --restart always \
-  -v $(pwd):/app \
-  -e UID=$(id -u) \
-  -e GID=$(id -g) \
-  side-job-android-notifier
-
-# 查看日志
-docker logs -f side-job-android-notifier
+docker compose up -d --build     # 构建并启动
+docker compose logs -f           # 查看运行日志
+docker compose down              # 停止并删除容器
 ```
 
-程序启动后会立即执行一次检查，然后按照设定的时间间隔持续监控。
-
-## 📊 实际使用效果
-
-### 真实案例分享
-> "自从使用了这个监控工具，我再也没有错过任何一个Android兼职项目。上周通过这个工具发现了3个高质量的远程外包项目，已经成功接到一个3万元的单子！" - 某位自由开发者反馈
-
-### 监控范围（专注兼职/外包平台）
-- **电鸭社区**: 远程工作和兼职机会的首选平台
-- **猿急送**: 程序员兼职和项目外包专业平台
-- **软件项目交易网**: 软件项目外包和兼职需求
-- **实现网**: 技术服务外包和兼职机会
+启动后会立即执行一轮检查，然后按 150–180 分钟随机间隔持续监控（仅在 8:00–22:00 生效）。
 
 ## 🏗️ 技术架构
 
-本项目采用现代化的可扩展架构设计，支持传统部署和容器化部署：
-
-### 核心组件
-- **配置驱动**: 通过 `config.py` 集中管理所有配置
-- **工厂模式**: `ScraperFactory` 根据网站类型动态创建抓取器
-- **抽象接口**: `BaseScraper` 定义统一的抓取标准
-- **独立存储**: 每个网站使用独立的数据文件，避免冲突
-- **容器化支持**: Docker镜像基于Playwright官方镜像，包含所有浏览器依赖
-
-### 架构优势
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Scheduler     │───▶│   Scraper       │───▶│   Notifier      │
-│   (调度器)       │    │   (抓取器)       │    │   (通知器)       │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Data Manager  │    │   HTML Debug    │    │   Logger        │
-│   (数据管理)     │    │   (调试文件)     │    │   (日志系统)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+main.py                调度 + 主流程（抓取 → 去重 → 打分 → 入库 → 推送）
+config.py              站点表、推荐阈值、用户画像、时间窗参数
+scrapers/
+  base_scraper.py      抓取基类（Playwright、HTML 调试快照、错误通知）
+  *_scraper.py         各站点抓取器
+  scraper_factory.py   按站点 key 创建抓取器
+core/
+  llm_analyzer.py      批量打分（分片、重试、失败告警）
+  data_manager.py      data/*.json 原子读写、去重
+  notifier.py          SMTP 汇总邮件 / 告警邮件
+  time_parser.py       发布时间解析与时间窗判定
+  logger.py            统一日志
 ```
 
-### 部署选项
-- **传统部署**: 直接在Python环境中运行
-- **Docker部署**: 使用预构建的Playwright镜像，包含所有依赖
-- **Docker Compose**: 一键部署，支持开发环境和生产环境
+设计要点：
+
+- **配置驱动**：站点表与阈值在 `config.py`，密钥、地址与用户画像在 `.env`，逻辑代码不硬编码站点差异
+- **抽象接口 + 工厂**：`BaseScraper` 定义统一契约，`ScraperFactory` 负责创建，加站点不改主流程
+- **站点独立存储**：每站一个 `data/*.json`，互不干扰，可单独清理
+- **失败可重入**：LLM 失败批次不入库，下一轮自然重试；分析成功才算「处理过」
 
 ## 🔧 高级配置
 
-### 自定义监控时间
-在 `main.py` 中修改监控时间段：
-```python
-# 默认在 8:00-22:00 期间监控
-if 8 <= now.hour < 23:
-    schedule.run_pending()
+### 调推荐口径
+
+`.env`：
+
+```bash
+USER_PROFILE="你的画像：技术方向 / 只接远程还是可到岗 / 明确不接的类型 / 报酬要求"
 ```
 
-### 添加新网站支持
-要添加新的招聘网站支持，只需：
-1. 在 `config.py` 的 `WEBSITES` 字典中添加新网站配置
-2. 在 `scrapers/` 目录下创建对应的抓取器类，继承 `BaseScraper`
-3. 在 `ScraperFactory` 中注册新的抓取器
+`config.py`：
+
+```python
+RECOMMEND_THRESHOLD = 5        # 推送门槛，想多收就调低
+MAX_PUSH_PER_RUN = 10          # 每轮最多推送条数，防刷屏
+RECENT_DAYS = 2                # 只分析最近 N 天的帖子
+POSITION_LIMIT = 30            # 无时间字段站点取列表前 N 条
+MAX_RECORDS_PER_FILE = 200     # 每站记录上限，防文件无限膨胀
+```
+
+### 改调度时间
+
+`main.py` 末尾：`if 8 <= now.hour < 23`（可执行时段）与 `random.randint(150, 180)`（间隔分钟）。
+
+### 添加新站点
+
+1. `config.py` 的 `WEBSITES` 里加一条（`url` / `name` / `data_file` / `time_mode`：有发布时间字段用 `field`，否则用 `position`）
+2. `scrapers/` 下新建抓取器类继承 `BaseScraper`，实现 `fetch_posts()`
+3. 在 `scrapers/scraper_factory.py` 的 `_scrapers` 里注册（可见性靠 `scrapers/__init__.py` 导出）
 
 ## 🐛 故障排除
 
-### 常见问题
+| 现象 | 排查方向 |
+|------|----------|
+| 收不到邮件 | 看 `docker compose logs -f` 里有没有「邮件发送成功」；163 用授权码不是登录密码；先翻垃圾箱 |
+| 一封都不推 | 阈值 `RECOMMEND_THRESHOLD` 太高，或 `USER_PROFILE` 与在招项目不匹配；日志里能看到每站「新帖 N 条 / 时间窗内 M 条」和打分结果 |
+| 某站点一直抓不到 | 站点改版，`urlData/` 里有当次的 HTML 快照，照着改选择器；同理会收到抓取失败的告警邮件 |
+| LLM 报 400 MissingSessionID | OpenCode Go 要求带稳定的 `x-opencode-session` 头，代码已自动生成；换自建接口时确认 base_url 不带 `/chat/completions` |
+| 改了 `.env` 不生效 | 环境变量在容器启动时注入：`docker compose up -d --force-recreate`；改 `config.py` 因 bind mount 直接生效 |
+| 容器时区/权限异常 | compose 已挂载 `/etc/localtime`、`TZ=Asia/Shanghai`，并按 `${UID}:${GID}` 以宿主机用户身份运行 |
 
-**Q: 程序启动后没有收到邮件？**
-A: 检查邮箱配置是否正确，建议使用授权码而非邮箱密码。
+## 📄 说明
 
-**Q: 网站访问失败怎么办？**
-A: 检查网络连接，程序会自动重试并发送错误报告。
-
-**Q: 如何查看调试信息？**
-A: 所有调试文件保存在 `urlData/` 目录下，包括HTML页面和JSON数据。
-
-**Q: Docker部署时遇到权限问题？**
-A: 确保当前用户对项目目录有读写权限，或者使用 `sudo` 命令。
-
-**Q: 容器运行后如何修改配置？**
-A: 直接修改本地的 `config.py` 文件，容器会自动重新加载配置（因为使用了卷挂载）。
-
-### 调试工具
-- **HTML调试文件**: 自动保存每个网站的HTML页面
-- **JSON数据文件**: 保存解析后的数据结构
-- **详细日志**: 完整的运行日志记录
+- 抓取仅针对公开列表页，请遵守目标站点 robots 与访问频率约定；本项目按 150–180 分钟随机间隔抓取，属于低频访问。
+- 邮件里只含标题、摘要、链接与推荐理由，不复制站点正文。
 
 ---
 
-**⭐ 如果这个项目对你有帮助，请给个Star支持一下！** 
-
-**💡 有任何问题或建议，欢迎提交Issue讨论！**
+**⭐ 如果这个项目对你有帮助，欢迎给个 Star；有问题或建议直接开 Issue。**

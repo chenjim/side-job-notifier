@@ -1,0 +1,10 @@
+- python 实现，跨平台，支持 python 3.8+（本地开发与 Docker 统一 Python 3.10），Docker 部署（playwright 镜像）
+- 定时（8-22 点，150-180 分钟随机间隔）全量抓取兼职/外包平台：电鸭、猿急送、软件项目交易网、实现网、V2EX 外包节点（被墙站点走宿主机代理）
+- 新帖去重（data/*.json 按 link）→ 时间窗过滤（RECENT_DAYS 内，无时间字段站点取列表前 POSITION_LIMIT 条）
+- LLM（OpenAI 兼容接口，config.py LLM_CONFIG）按 USER_PROFILE 画像打分 0-10 并给出推荐理由；调 opencode.ai/zen/go 必须带 x-opencode-session 头，否则 400 MissingSessionID
+- score >= RECOMMEND_THRESHOLD 按分数降序，最多 MAX_PUSH_PER_RUN 条，汇总邮件推送到 SMTP_TO 指定的收件人
+- 分析成功（含低分）写入 data/*.json（原子写），防重复分析；LLM 失败批次不入库，下轮重试并发邮件告警
+- 配置集中在 config.py；密钥、邮箱地址、用户画像等真实值一律放 .env（已被 .gitignore 忽略），compose 的 environment 里显式透传
+- 本地开发用 .venv（python3 -m venv .venv；requirements.txt 含运行时依赖，pytest 需单独安装）
+- 修改后运行 .venv/bin/python -m pytest tests/ 验证
+- 部署：docker compose down && docker compose up -d --build（必须先 down，否则新旧容器同时抓取、重复发信）

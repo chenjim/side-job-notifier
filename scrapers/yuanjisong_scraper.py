@@ -8,8 +8,7 @@ import time
 import random
 from datetime import datetime
 from .base_scraper import BaseScraper
-from logger import log_info, log_error, log_warning
-
+from core.logger import log_info, log_error, log_warning
 # 尝试导入 Playwright，如果失败则回退到 requests
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -303,98 +302,157 @@ class YuanjisongScraper(BaseScraper):
 
         posts = []
         try:
-            # 查找所有职位容器
-            job_containers = soup.find_all('div', class_=['div_bg_color_fff', 'div_padding_1', 'hover1', 'margin_bottom_1'])
-            
+            # 新版 v2 布局优先（yjs-job-card），旧版布局兜底
+            job_containers = soup.find_all('div', class_='yjs-job-card')
+            is_v2_layout = bool(job_containers)
+            if not is_v2_layout:
+                job_containers = soup.find_all('div', class_=['div_bg_color_fff', 'div_padding_1', 'hover1', 'margin_bottom_1'])
+
             for container in job_containers:
-                # 提取职位标题
-                title_element = container.find('b')
-                if not title_element:
-                    continue
-                    
-                title = title_element.get_text(strip=True)
-                
-                # 检查标题是否包含关键词
-                if not self._contains_keywords(title):
-                    continue
-                
-                # 提取职位链接
-                link_element = container.find('a', href=True)
-                link = ""
-                if link_element and link_element.get('href'):
-                    href = link_element.get('href')
-                    if href.startswith('/job/'):
-                        link = f"https://www.yuanjisong.com{href}"
-                    elif href.startswith('https://www.yuanjisong.com/job/'):
-                        link = href
-                
-                # 提取职位描述
-                description = ""
-                desc_elements = container.find_all('p')
-                for p in desc_elements:
-                    text = p.get_text(strip=True)
-                    if '描述：' in text:
-                        description = text.replace('描述：', '').strip()
-                        break
-                
-                # 提取工时信息
-                duration = ""
-                for p in desc_elements:
-                    text = p.get_text(strip=True)
-                    if '工时：' in text:
-                        duration = text.replace('工时：', '').strip()
-                        break
-                
-                # 提取总价信息
-                price = ""
-                for p in desc_elements:
-                    text = p.get_text(strip=True)
-                    if '总价：' in text:
-                        # 使用正则表达式提取价格数字
-                        price_match = re.search(r'(\d+)\s*元', text)
-                        if price_match:
-                            price = f"{price_match.group(1)}元"
-                        break
-                
-                # 提取发布者信息
-                publisher = ""
-                publisher_elements = container.find_all('a')
-                for a in publisher_elements:
-                    if '/employer/' in a.get('href', ''):
-                        publisher = a.get_text(strip=True)
-                        break
-                
-                # 构建摘要信息
-                summary_parts = []
-                if duration:
-                    summary_parts.append(f"工时: {duration}")
-                if price:
-                    summary_parts.append(f"总价: {price}")
-                if publisher:
-                    summary_parts.append(f"发布者: {publisher}")
-                if description:
-                    # 限制描述长度
-                    desc_short = description[:100] + "..." if len(description) > 100 else description
-                    summary_parts.append(f"描述: {desc_short}")
-                
-                summary = " | ".join(summary_parts)
-                
-                # 尝试从 URL 中提取 job ID 作为时间参考
-                job_id = ""
-                if link:
-                    job_id_match = re.search(r'/job/(\d+)', link)
-                    if job_id_match:
-                        job_id = job_id_match.group(1)
-                
-                posts.append({
-                    "title": title,
-                    "link": link,
-                    "summary": summary,
-                    "published_at": f"Job ID: {job_id}" if job_id else ""  # 猿急送页面没有明确的发布时间，使用 Job ID 作为参考
-                })
+                if is_v2_layout:
+                    post = self._parse_v2_card(container)
+                else:
+                    post = self._parse_legacy_card(container)
+                if post:
+                    posts.append(post)
 
         except Exception as e:
             log_error(f"解析职位时发生未知错误: {e}")
             return []
 
         return posts
+
+    def _parse_v2_card(self, container) -> Dict[str, str]:
+        """解析新版 v2 布局的职位卡片。"""
+        title_elem = container.find('a', class_='yjs-job-card-title')
+        if not title_elem:
+            return None
+        title = title_elem.get_text(strip=True)
+
+        # 职位链接
+        desc_link = container.find('a', class_='yjs-job-card-desc-link')
+        link = ""
+        if desc_link and desc_link.get('href'):
+            href = desc_link.get('href')
+            link = href if href.startswith('http') else f"https://www.yuanjisong.com{href}"
+
+        # 完整描述（含技术要求，利于 LLM 分析）
+        desc_elem = container.find('div', class_='yjs-job-card-desc')
+        description = ""
+        if desc_elem:
+            description = ' '.join(desc_elem.get_text(' ', strip=True).split())
+
+        # 徽章（工时/远程等）
+        badges = ""
+        badge_elem = container.find('div', class_='yjs-job-card-badges')
+        if badge_elem:
+            badges = ' '.join(badge_elem.get_text(' ', strip=True).split())
+
+        # 预算
+        price = ""
+        budget_elem = container.find('div', class_='yjs-job-budget-value')
+        if budget_elem:
+            price_text = ' '.join(budget_elem.get_text(' ', strip=True).split())
+            price = price_text.replace('元', '').strip()
+
+        # 发布者
+        publisher = ""
+        name_elem = container.find('span', class_='yjs-job-employer-name')
+        if name_elem:
+            publisher = name_elem.get_text(strip=True)
+
+        # 构建摘要
+        summary_parts = []
+        if badges:
+            summary_parts.append(badges)
+        if price:
+            summary_parts.append(f"总价: {price}元")
+        if publisher:
+            summary_parts.append(f"发布者: {publisher}")
+        if description:
+            summary_parts.append(f"描述: {description}")
+        summary = " | ".join(summary_parts)
+
+        return {
+            "title": title,
+            "link": link,
+            "summary": summary,
+            "published_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # 列表页无发布时间，取抓取时间
+        }
+
+    def _parse_legacy_card(self, container) -> Dict[str, str]:
+        """解析旧版布局的职位容器。"""
+        # 提取职位标题
+        title_element = container.find('b')
+        if not title_element:
+            return None
+
+        title = title_element.get_text(strip=True)
+
+        # 提取职位链接
+        link_element = container.find('a', href=True)
+        link = ""
+        if link_element and link_element.get('href'):
+            href = link_element.get('href')
+            if href.startswith('/job/'):
+                link = f"https://www.yuanjisong.com{href}"
+            elif href.startswith('https://www.yuanjisong.com/job/'):
+                link = href
+
+        # 提取职位描述
+        description = ""
+        desc_elements = container.find_all('p')
+        for p in desc_elements:
+            text = p.get_text(strip=True)
+            if '描述：' in text:
+                description = text.replace('描述：', '').strip()
+                break
+
+        # 提取工时信息
+        duration = ""
+        for p in desc_elements:
+            text = p.get_text(strip=True)
+            if '工时：' in text:
+                duration = text.replace('工时：', '').strip()
+                break
+
+        # 提取总价信息
+        price = ""
+        for p in desc_elements:
+            text = p.get_text(strip=True)
+            if '总价：' in text:
+                # 使用正则表达式提取价格数字
+                price_match = re.search(r'(\d+)\s*元', text)
+                if price_match:
+                    price = f"{price_match.group(1)}元"
+                break
+
+        # 提取发布者信息
+        publisher = ""
+        publisher_elements = container.find_all('a')
+        for a in publisher_elements:
+            if '/employer/' in a.get('href', ''):
+                publisher = a.get_text(strip=True)
+                break
+
+        # 构建摘要信息
+        summary_parts = []
+        if duration:
+            summary_parts.append(f"工时: {duration}")
+        if price:
+            summary_parts.append(f"总价: {price}")
+        if publisher:
+            summary_parts.append(f"发布者: {publisher}")
+        if description:
+            # 限制描述长度
+            desc_short = description[:100] + "..." if len(description) > 100 else description
+            summary_parts.append(f"描述: {desc_short}")
+
+        summary = " | ".join(summary_parts)
+
+        return {
+            "title": title,
+            "link": link,
+            "summary": summary,
+            "published_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # 列表页无发布时间，取抓取时间
+        }

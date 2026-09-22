@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from typing import List, Dict
 from .base_scraper import BaseScraper
-from logger import log_info, log_error, log_warning
+from core.logger import log_info, log_error, log_warning
 
 class EleduckScraper(BaseScraper):
     """电鸭社区抓取器。"""
@@ -73,18 +73,17 @@ class EleduckScraper(BaseScraper):
                     continue
 
                 title = post_data.get('title', '')
-                if self._contains_keywords(title):
-                    post_id = post_data.get('id')
-                    if post_id:
-                        link = f"https://eleduck.com/posts/{post_id}"
-                        summary = post_data.get('summary', '')
-                        published_at = post_data.get('published_at', '')
-                        posts.append({
-                            "title": title,
-                            "link": link,
-                            "summary": summary,
-                            "published_at": published_at
-                        })
+                post_id = post_data.get('id')
+                if post_id:
+                    link = f"https://eleduck.com/posts/{post_id}"
+                    summary = post_data.get('summary', '')
+                    published_at = post_data.get('published_at', '')
+                    posts.append({
+                        "title": title,
+                        "link": link,
+                        "summary": summary,
+                        "published_at": published_at
+                    })
 
         except Exception as e:
             log_error(f"解析帖子时发生未知错误: {e}")

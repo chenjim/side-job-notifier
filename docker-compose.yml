@@ -1,13 +1,13 @@
 
 services:
   app:
-    container_name: side-job-android-notifier
+    container_name: side-job-notifier
     build: .
     restart: always
     network_mode: host
     tty: true
     stdin_open: true
-    # 使用当前用户的UID和GID运行容器 (chenjim: UID=1000, GID=1001)
+    # 使用宿主当前用户的 UID/GID 运行容器，避免容器写出的文件属主变成 root
     user: "${UID:-1000}:${GID:-1001}"
     dns:
       - 8.8.8.8
@@ -16,7 +16,29 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONIOENCODING=utf-8
+      - PYTHONDONTWRITEBYTECODE=1
       - TZ=Asia/Shanghai
+      # 密钥/地址来自项目目录下的 .env（已被 .gitignore 忽略，不入库）
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://opencode.ai/zen/go/v1}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - LLM_BATCH_SIZE=${LLM_BATCH_SIZE:-8}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
+      - SMTP_HOST=${SMTP_HOST:-smtp.163.com}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_TO=${SMTP_TO}
+      # 用户画像（真实值放 .env，代码里只留示例默认值）
+      - USER_PROFILE=${USER_PROFILE}
+      # 被墙站点（如 V2EX，DNS 被投毒/SNI 被重置）走宿主机代理；
+      # network_mode: host 下容器内 127.0.0.1 即宿主机
+      - HTTP_PROXY=${PROXY_URL:-http://127.0.0.1:7890}
+      - HTTPS_PROXY=${PROXY_URL:-http://127.0.0.1:7890}
+      - ALL_PROXY=${PROXY_URL:-http://127.0.0.1:7890}
+      # 国内站点与邮箱直连，避免绕行代理
+      - NO_PROXY=localhost,127.0.0.1,eleduck.com,yuanjisong.com,sxsoft.com,shixian.com,163.com
+      - no_proxy=localhost,127.0.0.1,eleduck.com,yuanjisong.com,sxsoft.com,shixian.com,163.com
     volumes:
       - .:/app
       - /etc/localtime:/etc/localtime:ro

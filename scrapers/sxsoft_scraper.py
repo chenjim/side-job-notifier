@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict
 from .base_scraper import BaseScraper
-from logger import log_info, log_error, log_warning
+from core.logger import log_info, log_error, log_warning
 
 class SxsoftScraper(BaseScraper):
     """软件项目交易网抓取器"""
@@ -68,10 +68,7 @@ class SxsoftScraper(BaseScraper):
                             continue
                             
                         category_text = category_link.get_text(strip=True)
-                        # 只匹配APP类别的项目
-                        if category_text != 'APP':
-                            continue
-                            
+                        
                         # 构建完整链接
                         href = a_elem.get('href', '')
                         if href.startswith('/'):
@@ -104,6 +101,9 @@ class SxsoftScraper(BaseScraper):
                             if time_text:
                                 published_at = time_text
                                 summary_parts.append(f"发布时间: {time_text}")
+                        if not published_at:
+                            # 页面无发布时间，取抓取时间
+                            published_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         
                         # 提取其他信息（如技能要求等）
                         info_divs = li.find_all('div', class_='row')
