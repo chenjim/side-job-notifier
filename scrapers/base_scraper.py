@@ -46,17 +46,19 @@ class BaseScraper(ABC):
         """
         return any(keyword.lower() in text.lower() for keyword in self.keywords)
     
-    def _save_html_debug(self, html_content: str, error_type: str = "debug") -> str:
-        """保存 HTML 调试文件到 urlData 目录。
+    def _save_html_debug(self, html_content: str, error_type: str = "debug",
+                         ext: str = "html") -> str:
+        """保存原始响应调试文件到 urlData 目录。
         
         Args:
-            html_content: HTML 内容
+            html_content: 响应内容（HTML / XML 文本）
             error_type: 错误类型（debug, access_error, parse_error）
+            ext: 文件扩展名（非 HTML 站点如 V2EX 订阅源传 xml）
             
         Returns:
             str: 保存的文件路径
         """
-        filename = f"{self.site_name}_{error_type}.html"
+        filename = f"{self.site_name}_{error_type}.{ext}"
         filepath = os.path.join(self.url_data_dir, filename)
         
         try:

@@ -1,4 +1,5 @@
 requests
+curl_cffi==0.16.3
 beautifulsoup4
 schedule
 playwright==1.55.0

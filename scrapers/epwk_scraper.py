@@ -1,11 +1,12 @@
 # scrapers/epwk_scraper.py
 
-import requests
+from curl_cffi import requests  # curl_cffi 复刻 Chrome TLS/HTTP2 指纹
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 from typing import List, Dict
 from .base_scraper import BaseScraper
+from .browser_headers import chrome_headers
 from core.logger import log_info, log_error
 
 class EpwkScraper(BaseScraper):
@@ -14,12 +15,10 @@ class EpwkScraper(BaseScraper):
     def fetch_posts(self) -> List[Dict[str, str]]:
         """获取并解析一品威客任务列表。"""
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-            response = requests.get(self.url, headers=headers, timeout=15)
+            response = requests.get(self.url, headers=chrome_headers(),
+                                    impersonate="chrome", timeout=15)
             response.raise_for_status()
-        except requests.RequestException as e:
+        except requests.RequestsError as e:
             error_msg = f"请求网页失败: {e}"
             log_error(error_msg)
             self._send_error_notification("access_error", error_msg)

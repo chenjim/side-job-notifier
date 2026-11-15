@@ -1,10 +1,11 @@
 # scrapers/shixian_scraper.py
 
-import requests
+from curl_cffi import requests  # curl_cffi 复刻 Chrome TLS/HTTP2 指纹
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Dict
 from .base_scraper import BaseScraper
+from .browser_headers import chrome_headers
 from core.logger import log_info, log_error, log_warning
 
 class ShixianScraper(BaseScraper):
@@ -13,12 +14,10 @@ class ShixianScraper(BaseScraper):
     def fetch_posts(self) -> List[Dict[str, str]]:
         """获取并解析实现网的项目列表，筛选出包含关键词的新项目。"""
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(self.url, headers=headers, timeout=10)
+            response = requests.get(self.url, headers=chrome_headers(),
+                                    impersonate="chrome", timeout=10)
             response.raise_for_status()
-        except requests.RequestException as e:
+        except requests.RequestsError as e:
             error_msg = f"请求网页失败: {e}"
             log_error(error_msg)
             # 发送访问异常邮件通知

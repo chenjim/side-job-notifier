@@ -15,18 +15,19 @@
 它已经不只服务 Android 方向：站点、关键词权重、值不值得推荐，全部由 `USER_PROFILE` 画像决定（真实画像放 `.env`，代码里只留示例），换方向只改画像文案，不用动抓取代码。
 
 - **抓取**：电鸭社区、猿急送、软件项目交易网、实现网、V2EX 外包节点（5 站）
-- **筛选**：按 link 去重 + 时间窗（最近 2 天；无时间字段的站点取列表前 30 条兜底）
+- **筛选**：入库去重（按 link）+ 时间窗（最近 3 天；无时间字段的站点取列表前 30 条兜底）
 - **判断**：LLM 按画像给 0–10 分并给出推荐理由，`score >= 5` 才推
 - **推送**：按分数降序取 Top 10，163 邮箱 SMTP 汇总邮件
+- **存储**：全部记录存 `data/jobs.db`（SQLite 单表多站点），按发布时间保留最近 1 年
 - **兜底**：LLM 批次失败发告警邮件；抓取失败保存 HTML 便于排查；全流程写日志
 
 ## 🔄 工作流程
 
-1. **定时调度**：容器常驻，启动后立即跑一轮，之后每天 8:00–22:00 之间每 150–180 分钟随机执行一次（不需要额外 crontab / 系统定时器）。
-2. **全量抓取**：工厂模式为每个站点创建抓取器，Playwright 处理动态渲染与基础反爬；被墙站点（V2EX）走宿主机代理，国内站点与邮箱直连。
-3. **去重 + 时间窗**：与 `data/*.json` 里已分析过的 link 比对，只留新帖；再按时间窗收敛，把 LLM 调用量压到最小。
+1. **定时调度**：容器常驻，每 15 分钟做一次心跳（仅 8:00–22:00 生效），按各站点的最小抓取间隔决定这一轮抓谁：电鸭 / V2EX 3–4 小时、猿急送 1–2 小时、软件项目交易网 24 小时（不需要额外 crontab / 系统定时器）。
+2. **全量抓取**：工厂模式为每个站点创建抓取器，Playwright 处理动态渲染与基础反爬；被墙站点（V2EX）走宿主机代理，国内站点与邮箱直连。V2EX 列表页被 Cloudflare 人机验证拦截（403），改抓官方 Atom 订阅源 `/feed/outsourcing.xml`（同样是最新主题，附带正文摘要）。
+3. **去重 + 时间窗**：与 `data/jobs.db` 里已评估（有评分）的 link 比对，只留未评估的；再按时间窗收敛，把 LLM 调用量压到最小。
 4. **LLM 打分**：按 `LLM_BATCH_SIZE`（默认 8 条）分批调用 OpenAI 兼容接口，模型返回 `score / recommend / reason`。
-5. **落盘 + 推送**：分析成功（含低分）立即原子写入 `data/*.json`，下轮不再重复分析；`score >= 5` 的按分数降序，最多 `MAX_PUSH_PER_RUN` 条汇总成一封邮件发出。
+5. **落盘 + 推送**：解析结果先以「未评估」状态入库，评分回写后即视为已处理，下轮不再重复分析；`score >= 5` 且发布时间在最近 3 天内的，按分数降序取最多 `MAX_PUSH_PER_RUN` 条汇总成一封邮件发出。每轮结束清理超过 `RETENTION_DAYS`（默认 365 天）的记录。
 
 ## 📋 功能特性
 
@@ -71,7 +72,7 @@ cp .env.example .env
 | `SMTP_HOST` / `SMTP_PORT` | 发件服务器 | `smtp.163.com` / `465` |
 | `SMTP_USER` / `SMTP_PASSWORD` | 发件账号 / 授权码 | 必填 |
 | `SMTP_TO` | 收件人 | — |
-| `USER_PROFILE` | 用户画像，决定「什么值得推」；留空则用代码里的示例画像 | 示例画像 |
+| `USER_PROFILE` | 用户画像，决定「什么值得推」；**只写硬性条件与风险偏好，不要写技术栈白名单**；留空则用代码里的示例画像 | 示例画像 |
 | `PROXY_URL` | 被墙站点走的宿主机代理 | `http://127.0.0.1:7890` |
 
 ### 3. 本地运行（开发调试）
@@ -97,7 +98,7 @@ docker compose logs -f           # 查看运行日志
 docker compose down              # 停止并删除容器
 ```
 
-启动后会立即执行一轮检查，然后按 150–180 分钟随机间隔持续监控（仅在 8:00–22:00 生效）。
+启动后立即检查一遍（未到间隔的站点自动跳过，重启不会集中轰炸站点），之后每 15 分钟按各站点自己的间隔抓取（仅在 8:00–22:00 生效）。
 
 ## 🏗️ 技术架构
 
@@ -109,19 +110,23 @@ scrapers/
   *_scraper.py         各站点抓取器
   scraper_factory.py   按站点 key 创建抓取器
 core/
+  site_scheduler.py    站点抓取节奏判定（独立间隔、失败快速重试）
   llm_analyzer.py      批量打分（分片、重试、失败告警）
-  data_manager.py      data/*.json 原子读写、去重
+  data_manager.py      data/jobs.db（SQLite）读写、去重、保留期清理、历史 JSON 迁移
   notifier.py          SMTP 汇总邮件 / 告警邮件
   time_parser.py       发布时间解析与时间窗判定
   logger.py            统一日志
+scripts/
+  migrate_json_to_sqlite.py  历史 data/*.json 一次性迁移入库
 ```
 
 设计要点：
 
 - **配置驱动**：站点表与阈值在 `config.py`，密钥、地址与用户画像在 `.env`，逻辑代码不硬编码站点差异
 - **抽象接口 + 工厂**：`BaseScraper` 定义统一契约，`ScraperFactory` 负责创建，加站点不改主流程
-- **站点独立存储**：每站一个 `data/*.json`，互不干扰，可单独清理
-- **失败可重入**：LLM 失败批次不入库，下一轮自然重试；分析成功才算「处理过」
+- **单库多站点**：所有解析结果落 `data/jobs.db` 的 `posts` 表，`site` 字段区分来源，`link` 为主键天然去重
+- **评分即处理**：`score IS NULL` 表示已解析未评估（含上轮 LLM 失败），下轮自动重试；有评分即视为已处理，不再重复分析推送
+- **时间锚点统一**：`time_ref` 优先取发布时间，缺失回落到分析时间/首次发现时间，保留期与推送时间窗都按它算
 
 ## 🔧 高级配置
 
@@ -130,7 +135,10 @@ core/
 `.env`：
 
 ```bash
-USER_PROFILE="你的画像：技术方向 / 只接远程还是可到岗 / 明确不接的类型 / 报酬要求"
+# 画像只写约束与风险偏好，不要写技术栈 / 行业白名单：
+# LLM 只按「需求清晰度、报酬与结算、远程可行性、风险」打分，
+# 写死方向反而会把能接的机会判成低分。
+USER_PROFILE="15年研发，全栈，任何软件方向都能上手（有 AI 工具）；只接远程，不接受驻场/到岗/出差；必须写明报酬或预算，无报酬试稿不接；只接需求方直发的招人帖"
 ```
 
 `config.py`：
@@ -138,18 +146,45 @@ USER_PROFILE="你的画像：技术方向 / 只接远程还是可到岗 / 明确
 ```python
 RECOMMEND_THRESHOLD = 5        # 推送门槛，想多收就调低
 MAX_PUSH_PER_RUN = 10          # 每轮最多推送条数，防刷屏
-RECENT_DAYS = 2                # 只分析最近 N 天的帖子
+RECENT_DAYS = 3                # 只评估/推送最近 N 天的帖子
 POSITION_LIMIT = 30            # 无时间字段站点取列表前 N 条
-MAX_RECORDS_PER_FILE = 200     # 每站记录上限，防文件无限膨胀
+DB_PATH = "data/jobs.db"       # 记录库路径（可用环境变量 DB_PATH 覆盖）
+RETENTION_DAYS = 365           # 记录保留天数，按发布时间（缺失回落分析时间）清理
 ```
 
-### 改调度时间
+### 改抓取节奏
 
-`main.py` 末尾：`if 8 <= now.hour < 23`（可执行时段）与 `random.randint(150, 180)`（间隔分钟）。
+```python
+# config.py
+LOOP_TICK_MINUTES = 15              # 心跳：每 15 分钟问一次谁到期了
+DEFAULT_FETCH_INTERVAL = (180, 240) # 没单独配置的站点：3-4 小时随机
+
+WEBSITES = {
+    "yuanjisong": {"min_interval_minutes": (60, 120), ...},  # 白天天天 1-2 小时
+    "sxsoft":     {"min_interval_minutes": 1440, ...},       # 一天一次
+}
+```
+
+- `min_interval_minutes` 支持整数（固定）或 `(min, max)`（区间内随机）
+- 上次抓取时间存在 `data/jobs.db` 的 `site_state` 表，重启不会重置节奏
+- 抓取失败按 30 分钟快速重试，不会因为一次异常白等一整天
+- 可执行时段改 `main.py` 里的 `if 8 <= now.hour < 23`
+
+### 数据存储与迁移
+
+记录统一存 `data/jobs.db`（SQLite），常用的直查方式：
+
+```bash
+sqlite3 data/jobs.db "select site, count(*), max(time_ref) from posts group by site;"
+sqlite3 data/jobs.db "select title, score from posts where score >= 5 order by time_ref desc limit 10;"
+sqlite3 data/jobs.db "select site, last_fetch_at, last_status, consecutive_empty from site_state;"   # 站点抓取节奏与健康度
+```
+
+从旧版（每站一个 `data/*.json`）升级：停容器 → 备份 `data/` → `.venv/bin/python scripts/migrate_json_to_sqlite.py`（导入成功后原文件改名为 `*.json.migrated`）→ 启动容器。库文件在 `data/` 目录内，沿用原有备份策略即可。
 
 ### 添加新站点
 
-1. `config.py` 的 `WEBSITES` 里加一条（`url` / `name` / `data_file` / `time_mode`：有发布时间字段用 `field`，否则用 `position`）
+1. `config.py` 的 `WEBSITES` 里加一条（`url` / `name` / `time_mode`：有发布时间字段用 `field`，否则用 `position`；站点 key 会自动写入库的 `site` 字段）
 2. `scrapers/` 下新建抓取器类继承 `BaseScraper`，实现 `fetch_posts()`
 3. 在 `scrapers/scraper_factory.py` 的 `_scrapers` 里注册（可见性靠 `scrapers/__init__.py` 导出）
 
@@ -166,7 +201,7 @@ MAX_RECORDS_PER_FILE = 200     # 每站记录上限，防文件无限膨胀
 
 ## 📄 说明
 
-- 抓取仅针对公开列表页，请遵守目标站点 robots 与访问频率约定；本项目按 150–180 分钟随机间隔抓取，属于低频访问。
+- 抓取仅针对公开列表页，请遵守目标站点 robots 与访问频率约定；各站点按 1 小时到 1 天的独立间隔抓取，属于低频访问。
 - 邮件里只含标题、摘要、链接与推荐理由，不复制站点正文。
 
 ---

@@ -6,8 +6,11 @@ from datetime import datetime, timedelta
 
 from core.logger import log_warning
 
+# 库内/状态文件统一的时间文本格式，字典序即时间序
+TS_FMT = '%Y-%m-%d %H:%M:%S'
 
-def parse_published_at(text: str) -> datetime:
+
+def parse_published_at(text: str, quiet: bool = False) -> datetime:
     """解析发布时间文本为本地时区的 datetime。
 
     支持的格式：
@@ -15,7 +18,7 @@ def parse_published_at(text: str) -> datetime:
       - YYYY.MM.DD（如 sxsoft: 2025.08.17）
       - YYYY-MM-DD、YYYY/MM/DD
       - 今天/昨天/X分钟前/X小时前/X天前
-    解析失败返回 None。
+    解析失败返回 None。quiet=True 时不打警告（调用方有兜底口径时用）。
     """
     if not text:
         return None
@@ -41,8 +44,10 @@ def parse_published_at(text: str) -> datetime:
         return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
 
     # ISO8601：尝试 Python 3.11 的 fromisoformat（支持时区）
+    # Python 3.10 的 fromisoformat 不认结尾 Z（如 V2EX 订阅源 2026-11-05T15:12:27Z），先转成 +00:00
+    iso_text = text[:-1] + '+00:00' if text.endswith(('Z', 'z')) else text
     try:
-        return datetime.fromisoformat(text).astimezone().replace(tzinfo=None)
+        return datetime.fromisoformat(iso_text).astimezone().replace(tzinfo=None)
     except ValueError:
         pass
 
@@ -53,7 +58,8 @@ def parse_published_at(text: str) -> datetime:
         except ValueError:
             continue
 
-    log_warning(f"无法解析发布时间: {text!r}")
+    if not quiet:
+        log_warning(f"无法解析发布时间: {text!r}")
     return None
 
 

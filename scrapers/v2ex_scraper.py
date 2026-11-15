@@ -1,76 +1,106 @@
 # scrapers/v2ex_scraper.py
-# V2EX 外包节点抓取器（https://www.v2ex.com/go/outsourcing）
+# V2EX 外包节点抓取器。
+# 2026-11 起列表页 https://www.v2ex.com/go/outsourcing 被 Cloudflare 人机验证拦截（HTTP 403，
+# 响应为 "Just a moment..." 挑战页），curl_cffi 无法通过；改抓官方 Atom 订阅源
+# https://www.v2ex.com/feed/outsourcing.xml —— 同样是节点最新主题，且附带正文摘要。
 
 import re
-import requests
+import time
+import xml.etree.ElementTree as ET
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 from typing import List, Dict
 from .base_scraper import BaseScraper
-from core.logger import log_info, log_error
+from .browser_headers import chrome_headers
+from core.logger import log_info, log_error, log_warning
+
+_ATOM = '{http://www.w3.org/2005/Atom}'
+_SUMMARY_LIMIT = 500  # 订阅源正文转纯文本后的摘要长度上限
+
+# 请求线路（proxies, 线路名, 本次尝试前等待秒数）：
+# 代理偶发 TLS 断连（SSL_ERROR_SYSCALL），间隔重试一次后仍失败则绕过代理直连兜底
+_ROUTES = (
+    (None, "代理", 0),
+    (None, "代理", 2),
+    ({'http': None, 'https': None}, "直连", 5),
+)
 
 
 class V2exScraper(BaseScraper):
-    """V2EX 外包节点抓取器。"""
+    """V2EX 外包节点抓取器（走 Atom 订阅源）。"""
 
     def fetch_posts(self) -> List[Dict[str, str]]:
-        """获取并解析 V2EX /go/outsourcing 的帖子列表。
+        """获取并解析 V2EX /feed/outsourcing.xml 的最新主题。
 
         返回字段：
             - title: 帖子标题
             - link: 帖子链接 (https://www.v2ex.com/t/{id})
-            - summary: 作者名（V2EX 列表页无正文摘要）
-            - published_at: ISO8601 发布时间（取自 span[title]，转标准格式）
+            - summary: 作者 + 正文摘要
+            - published_at: ISO8601 发布时间（UTC，如 2026-11-05T15:12:27Z）
         """
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
-            }
-            response = requests.get(self.url, headers=headers, timeout=15)
-            response.raise_for_status()  # 如果请求失败则抛出异常
-        except requests.RequestException as e:
-            error_msg = f"请求网页失败: {e}"
+        response, error = self._request_feed()
+        if response is None:
+            error_msg = f"请求网页失败（代理重试与直连均失败）: {error}"
             log_error(error_msg)
             # 发送访问异常邮件通知
             self._send_error_notification("access_error", error_msg)
             return []
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        self._save_html_debug(response.text, "debug")
+        debug_path = self._save_html_debug(response.text, "debug", ext="xml")
 
+        try:
+            posts = self._parse_feed(response.text)
+        except ET.ParseError as e:
+            error_msg = f"解析订阅源失败: {e}"
+            log_error(error_msg)
+            # 带上调试文件路径，告警邮件里能直接定位原始订阅源内容
+            self._send_error_notification("parse_error", error_msg, debug_path)
+            return []
+
+        log_info(f"  V2EX 外包节点解析到 {len(posts)} 条帖子")
+        return posts
+
+    def _request_feed(self):
+        """按 _ROUTES 依次尝试请求订阅源，返回 (response, 最后一次异常)。"""
+        last_error = None
+        for proxies, route, delay in _ROUTES:
+            if delay:
+                time.sleep(delay)
+            try:
+                response = requests.get(self.url, headers=chrome_headers(),
+                                        impersonate="chrome", timeout=15,
+                                        proxies=proxies)
+                response.raise_for_status()
+                return response, None
+            except requests.RequestsError as e:
+                last_error = e
+                log_warning(f"  V2EX 订阅源{route}请求失败: {e}")
+        return None, last_error
+
+    def _parse_feed(self, xml_text: str) -> List[Dict[str, str]]:
+        """解析 Atom 订阅源，返回标准帖子字段列表。"""
+        root = ET.fromstring(xml_text)
         posts = []
-        # 每个帖子条目：td 内含 span.item_title > a.topic-link（标题）和 span.topic_info > span[title]（发布时间）
-        for a in soup.select('a.topic-link'):
-            title = a.get_text(strip=True)
-            href = a.get('href', '')
+        for entry in root.findall(f'{_ATOM}entry'):
+            title = (entry.findtext(f'{_ATOM}title') or '').strip()
+            href = entry.find(f'{_ATOM}link')
+            href = href.get('href', '') if href is not None else ''
             m = re.search(r'/t/(\d+)', href)
-            if not m:
+            if not title or not m:
                 continue
-            topic_id = m.group(1)
-            link = f"https://www.v2ex.com/t/{topic_id}"
+            link = f"https://www.v2ex.com/t/{m.group(1)}"
 
-            # 发布时间：在同级 span.topic_info 内的 span[title] 属性
-            published_at = ''
-            td = a.find_parent('td')
-            if td:
-                tspan = td.select_one('span.topic_info span[title]')
-                if tspan and tspan.get('title'):
-                    raw = tspan['title'].strip()
-                    # 转标准 ISO8601：'2026-09-09 15:11:33 +08:00' -> '2026-09-09T15:11:33+08:00'
-                    published_at = raw.replace(' ', 'T', 1).replace(' ', '')
-
-            # 作者名作为摘要
-            author = ''
-            if td:
-                aspan = td.select_one('span.topic_info strong a')
-                if aspan:
-                    author = aspan.get_text(strip=True)
+            author = (entry.findtext(f'{_ATOM}author/{_ATOM}name') or '').strip()
+            body = entry.findtext(f'{_ATOM}content') or ''
+            text = BeautifulSoup(body, 'html.parser').get_text(' ', strip=True)
+            if len(text) > _SUMMARY_LIMIT:
+                text = text[:_SUMMARY_LIMIT] + '...'
+            summary = f"作者: {author}" + (f"\n{text}" if text else '')
 
             posts.append({
                 "title": title,
                 "link": link,
-                "summary": f"作者: {author}" if author else '',
-                "published_at": published_at
+                "summary": summary,
+                "published_at": (entry.findtext(f'{_ATOM}published') or '').strip(),
             })
-
-        log_info(f"  V2EX 外包节点解析到 {len(posts)} 条帖子")
         return posts

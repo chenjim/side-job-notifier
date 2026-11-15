@@ -19,6 +19,12 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 SYSTEM_PROMPT = (
     "你是兼职/外包项目机会筛选助手，用户本人是开发者，正在找项目/雇主（需求方）。"
     "根据用户画像，判断每个帖子是否值得推荐，并给出评分与理由。只输出 JSON，不要输出任何其他内容。\n\n"
+    "评分只看这四件事，不要按技术栈或行业方向的匹配度打分——用户有 AI 工具加持，任何软件方向都能交付，"
+    "画像里没提到的技术栈或行业绝不构成扣分理由：\n"
+    "1. 需求是否清晰可交付（有具体交付物、范围、验收标准）；\n"
+    "2. 报酬与结算是否合理（预算明确、预付或里程碑付款优于完工后一次性结算）；\n"
+    "3. 远程是否真能落地（是否隐含到岗、坐班、驻场、长期出差）；\n"
+    "4. 风险项（需求含糊、要求先免费出 demo 再议价、明显低于市场价、无限改需求）。\n\n"
     "关键区分：帖子发布者是「需求方」（招人/发外包单）还是「服务方」（开发者自荐接单）。\n"
     "- 需求方帖子：描述具体项目需求、招聘岗位、外包任务，等着别人应聘/接单 —— 这才是用户要找的机会。\n"
     "- 服务方帖子：发布者自我介绍技术栈、列出\"可以接的活\"、晒过往项目/Star数来揽客，"
@@ -55,12 +61,14 @@ class LLMAnalyzer:
         # 防御：若用户填了完整 /chat/completions 路径，裁掉让 SDK 拼接
         if base_url.endswith("/chat/completions"):
             base_url = base_url[: -len("/chat/completions")]
-        # OpenCode Go 要求每个会话带稳定的 x-opencode-session，否则 400 MissingSessionID
-        default_headers = {}
-        if "opencode.ai" in base_url:
-            default_headers["x-opencode-session"] = os.environ.get(
+        # OpenCode Go 要求每个请求带稳定的 x-opencode-session，否则 400 MissingSessionID。
+        # 无条件携带：经 new-api（tok.h89.cn，渠道全透传）中转时同样需要；
+        # 对无关端点（DeepSeek 官方等）无害，避免换 base_url 再踩坑。
+        default_headers = {
+            "x-opencode-session": os.environ.get(
                 "OPENCODE_SESSION_ID"
             ) or f"side-job-notifier-{uuid.uuid4().hex[:12]}"
+        }
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,

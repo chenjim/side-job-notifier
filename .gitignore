@@ -22,6 +22,9 @@ html.txt
 data.json
 android.json
 data/
+*.db
+*.db-wal
+*.db-shm
 *.json
 
 urlData/

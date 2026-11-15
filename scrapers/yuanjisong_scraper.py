@@ -8,6 +8,7 @@ import time
 import random
 from datetime import datetime
 from .base_scraper import BaseScraper
+from .browser_headers import chrome_headers, chrome_user_agent, pick_chrome_version, PLATFORMS
 from core.logger import log_info, log_error, log_warning
 # 尝试导入 Playwright，如果失败则回退到 requests
 try:
@@ -16,51 +17,33 @@ try:
     log_info("Playwright 可用，将使用浏览器模式")
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    import requests
-    log_warning("Playwright 未安装，使用 requests 模式（可能被防火墙拦截）")
+    from curl_cffi import requests  # curl_cffi 复刻 Chrome TLS/HTTP2 指纹
+    log_warning("Playwright 未安装，使用 curl_cffi 模式（可能被防火墙拦截）")
     log_warning("建议安装: pip install playwright && playwright install chromium")
 
 class YuanjisongScraper(BaseScraper):
     """猿急送抓取器 - 增强版，优先使用 Playwright 绕过防火墙。"""
 
-    # 多个真实的User-Agent轮换（用于 requests 模式）
-    USER_AGENTS = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/120.0',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
-    ]
+    # requests 模式下按平台轮换真实 Chrome 指纹（UA 与 sec-ch-ua 由
+    # browser_headers 统一生成，避免各写一份过期 UA）
+    REQUEST_PLATFORMS = list(PLATFORMS)
 
     def __init__(self, url: str, keywords: List[str]):
         super().__init__(url, keywords)
         if not PLAYWRIGHT_AVAILABLE:
-            self.session = requests.Session()
+            self.session = requests.Session(impersonate="chrome")
             self._setup_session()
 
     def _setup_session(self):
         """设置会话，添加反反爬策略（仅用于 requests 模式）"""
-        user_agent = random.choice(self.USER_AGENTS)
+        # 按平台生成一致的 Chrome 请求头（UA / sec-ch-ua / platform 对齐）
+        self.session.headers.update(chrome_headers(random.choice(self.REQUEST_PLATFORMS)))
 
-        # 更真实的浏览器请求头
-        self.session.headers.update({
-            'User-Agent': user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"'
-        })
+    @staticmethod
+    def _is_job_list_html(html: str) -> bool:
+        """HTML 是否为猿急送的职位列表页（含卡片），用于判断 403 是否只是 WAF 状态码。"""
+        return ('job_card' in html or 'yjs-job-card' in html
+                or 'yjs-job-list-page' in html)
 
     def _fetch_with_playwright(self, url: str, max_retries: int = 3) -> str:
         """使用 Playwright 获取页面内容（推荐方式）"""
@@ -86,7 +69,7 @@ class YuanjisongScraper(BaseScraper):
                     # 创建上下文，设置更真实的浏览器环境
                     context = browser.new_context(
                         viewport={'width': 1920, 'height': 1080},
-                        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        user_agent=chrome_user_agent(),
                         locale='zh-CN',
                         timezone_id='Asia/Shanghai',
                         # 添加额外的权限和特性
@@ -158,13 +141,31 @@ class YuanjisongScraper(BaseScraper):
 
                     log_info(f"响应状态码: {status_code}, 内容长度: {len(content)}")
 
-                    # 检查是否被拦截
+                    # 站点 WAF 常对「本会话首次访问该 URL」返回 403，但返回的其实是
+                    # 完整页面（职位卡都在）；同一 context 内重新加载即变 200。
+                    # 重建浏览器会丢 cookie、又被拦，故这里在同会话内重载解决。
                     if status_code == 403:
-                        log_warning(f"第{attempt + 1}次尝试被拦截 (403)")
-                        browser.close()
-                        if attempt < max_retries - 1:
-                            continue
-                        raise Exception("访问被拒绝 (403)")
+                        log_warning(f"第{attempt + 1}次返回 403，尝试同会话内重新加载...")
+                        for reload_i in range(2):
+                            time.sleep(random.uniform(1.5, 3))
+                            response = page.goto(url, wait_until='networkidle', timeout=30000)
+                            time.sleep(random.uniform(1.5, 3))
+                            content = page.content()
+                            status_code = response.status if response else 0
+                            log_info(f"  重新加载第{reload_i + 1}次: 状态码 {status_code}, 长度 {len(content)}")
+                            if status_code != 403:
+                                break
+
+                    # 兜底：若仍是 403 但内容确为正常列表页，则放行（WAF 只改状态码不改内容）
+                    if status_code == 403:
+                        if self._is_job_list_html(content):
+                            log_warning("403 但内容为正常列表页，按成功处理")
+                        else:
+                            log_warning(f"第{attempt + 1}次尝试被拦截 (403)")
+                            browser.close()
+                            if attempt < max_retries - 1:
+                                continue
+                            raise Exception("访问被拒绝 (403)")
 
                     # 检查是否有人机验证
                     if '人机验证' in content or 'verifyBox' in content or 'BT_' in content:
@@ -212,10 +213,11 @@ class YuanjisongScraper(BaseScraper):
                     log_info(f"第{attempt + 1}次尝试访问，延迟{delay:.1f}秒")
                     time.sleep(delay)
 
-                    # 重试时更换User-Agent
-                    new_user_agent = random.choice(self.USER_AGENTS)
-                    self.session.headers.update({'User-Agent': new_user_agent})
-                    log_info(f"更换User-Agent: {new_user_agent[:50]}...")
+                    # 重试时更换为另一平台的真实 Chrome 指纹（版本也重新随机）
+                    platform = random.choice(self.REQUEST_PLATFORMS)
+                    version = pick_chrome_version()
+                    self.session.headers.update(chrome_headers(platform, version=version))
+                    log_info(f"更换请求指纹: Chrome/{version} ({platform})")
 
                 # 更新Referer头，模拟从主页访问
                 if attempt == 0:
@@ -302,17 +304,21 @@ class YuanjisongScraper(BaseScraper):
 
         posts = []
         try:
-            # 新版 v2 布局优先（yjs-job-card），旧版布局兜底
-            job_containers = soup.find_all('div', class_='yjs-job-card')
-            is_v2_layout = bool(job_containers)
-            if not is_v2_layout:
-                job_containers = soup.find_all('div', class_=['div_bg_color_fff', 'div_padding_1', 'hover1', 'margin_bottom_1'])
-
-            for container in job_containers:
-                if is_v2_layout:
-                    post = self._parse_v2_card(container)
+            # 布局优先级：v3(job_card) > v2(yjs-job-card) > 旧版
+            v3_cards = soup.find_all('div', class_='job_card')
+            if v3_cards:
+                targets = [(c, self._parse_v3_card) for c in v3_cards]
+            else:
+                v2_cards = soup.find_all('div', class_='yjs-job-card')
+                if v2_cards:
+                    targets = [(c, self._parse_v2_card) for c in v2_cards]
                 else:
-                    post = self._parse_legacy_card(container)
+                    legacy = soup.find_all('div', class_=['div_bg_color_fff', 'div_padding_1',
+                                                          'hover1', 'margin_bottom_1'])
+                    targets = [(c, self._parse_legacy_card) for c in legacy]
+
+            for container, parser in targets:
+                post = parser(container)
                 if post:
                     posts.append(post)
 
@@ -321,6 +327,63 @@ class YuanjisongScraper(BaseScraper):
             return []
 
         return posts
+
+    def _parse_v3_card(self, container) -> Dict[str, str]:
+        """解析新版 v3 布局（div.job_card）的职位卡片。"""
+        title_link = container.find('a', class_='job_card_title_link')
+        if title_link:
+            title = title_link.get_text(strip=True)
+            href = title_link.get('href', '')
+            link = href if href.startswith('http') else f"https://www.yuanjisong.com{href}"
+        else:
+            # 兜底：h4.job_card_title 只有标题文本，无链接
+            title_elem = container.find('h4', class_='job_card_title')
+            title = title_elem.get_text(strip=True) if title_elem else ''
+            link = ''
+        if not title:
+            return None
+
+        # 标签（项目制/全国远程、工时）
+        badges = ''
+        tags_elem = container.find('div', class_='job_card_tags')
+        if tags_elem:
+            badges = ' '.join(tags_elem.get_text(' ', strip=True).split())
+
+        # 预算
+        price = ''
+        price_elem = container.find('div', class_='job_card_price')
+        if price_elem:
+            price = ' '.join(price_elem.get_text(' ', strip=True).split())
+
+        # 发布者
+        publisher = ''
+        pub_elem = container.find('a', class_='job_card_publisher_name')
+        if pub_elem:
+            publisher = pub_elem.get_text(strip=True)
+
+        # 完整描述（利于 LLM 判断）
+        description = ''
+        desc_elem = container.find('div', class_='job_card_desc')
+        if desc_elem:
+            description = ' '.join(desc_elem.get_text(' ', strip=True).split())
+            description = description.replace('描述：', '', 1).strip()
+
+        summary_parts = []
+        if badges:
+            summary_parts.append(badges)
+        if price:
+            summary_parts.append(f"总价: {price}")
+        if publisher:
+            summary_parts.append(f"发布者: {publisher}")
+        if description:
+            summary_parts.append(f"描述: {description}")
+
+        return {
+            "title": title,
+            "link": link,
+            "summary": " | ".join(summary_parts),
+            "published_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # 列表页无发布时间，取抓取时间
+        }
 
     def _parse_v2_card(self, container) -> Dict[str, str]:
         """解析新版 v2 布局的职位卡片。"""

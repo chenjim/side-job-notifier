@@ -1,9 +1,11 @@
+# 开机自启：restart 刻意为 "no" —— dockerd 开机会把带策略的容器一波并行恢复，
+# 全机容器统一由宿主 ~/.local/bin/containers-stagger.sh（root crontab @reboot）自动分批拉起
 
 services:
   app:
     container_name: side-job-notifier
     build: .
-    restart: always
+    restart: "no"
     network_mode: host
     tty: true
     stdin_open: true
